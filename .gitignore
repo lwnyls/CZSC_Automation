@@ -1,0 +1,17 @@
+# 数据库文件
+data.db
+
+# TXT 数据文件
+data/
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# IDE
+.codebuddy/
+
+# 环境
+venv/
+.venv/
+*.egg-info/

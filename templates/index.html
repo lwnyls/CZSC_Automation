@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MNQ2606 K线实时监控</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #1a1a2e;
+            color: #e0e0e0;
+            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 24px;
+            background: #16213e;
+            border-bottom: 1px solid #0f3460;
+        }
+        .header h1 {
+            font-size: 20px;
+            color: #e94560;
+            font-weight: 600;
+        }
+        .header .info {
+            display: flex;
+            gap: 24px;
+            font-size: 13px;
+            color: #a0a0a0;
+        }
+        .header .info .price {
+            font-size: 22px;
+            font-weight: bold;
+        }
+        .header .info .price.up { color: #e94560; }
+        .header .info .price.down { color: #0cce80; }
+        .header .info .label { color: #888; margin-right: 4px; }
+        .toolbar {
+            display: flex;
+            align-items: center;
+            padding: 8px 24px;
+            background: #16213e;
+            border-bottom: 1px solid #0f3460;
+            gap: 8px;
+        }
+        .toolbar .period-btn {
+            padding: 5px 16px;
+            background: transparent;
+            border: 1px solid #0f3460;
+            color: #a0a0a0;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+        .toolbar .period-btn:hover { border-color: #e94560; color: #e94560; }
+        .toolbar .period-btn.active {
+            background: #e94560;
+            border-color: #e94560;
+            color: #fff;
+        }
+        .toolbar .status {
+            margin-left: auto;
+            font-size: 12px;
+            color: #666;
+        }
+        .toolbar .status .dot {
+            display: inline-block;
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: #0cce80;
+            margin-right: 6px;
+            animation: blink 2s infinite;
+        }
+        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+        .toolbar .toggle-btn {
+            padding: 5px 12px;
+            background: transparent;
+            border: 1px solid #0f3460;
+            color: #a0a0a0;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+            user-select: none;
+        }
+        .toolbar .toggle-btn:hover { border-color: #e94560; color: #e94560; }
+        .toolbar .toggle-btn.active {
+            background: rgba(233,69,96,0.15);
+            border-color: #e94560;
+            color: #e94560;
+        }
+        #chart { width: 100%; height: calc(100vh - 100px); }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>MNQ2606 微纳指06</h1>
+        <div class="info">
+            <span>
+                <span class="price" id="currentPrice">--</span>
+            </span>
+            <span>
+                <span class="label">开:</span><span id="infoOpen">--</span>
+            </span>
+            <span>
+                <span class="label">高:</span><span id="infoHigh">--</span>
+            </span>
+            <span>
+                <span class="label">低:</span><span id="infoLow">--</span>
+            </span>
+            <span>
+                <span class="label">K线数:</span><span id="infoTotalBars">--</span>
+            </span>
+            <span>
+                <span class="label">Tick数:</span><span id="infoTicks">--</span>
+            </span>
+        </div>
+    </div>
+    <div class="toolbar">
+        <button class="period-btn" data-period="5s">5秒</button>
+        <button class="period-btn active" data-period="1m">1分</button>
+        <button class="period-btn" data-period="5m">5分</button>
+        <button class="period-btn" data-period="15m">15分</button>
+        <button class="period-btn" data-period="30m">30分</button>
+        <button class="period-btn" data-period="1h">1时</button>
+        <span style="margin-left:16px; border-left:1px solid #0f3460; height:20px; display:inline-block; vertical-align:middle;"></span>
+        <button class="toggle-btn" id="toggleVolume">成交量</button>
+        <button class="toggle-btn" id="toggleMA">均线</button>
+        <span class="status"><span class="dot"></span><span id="statusText">实时更新中</span></span>
+    </div>
+    <div id="chart"></div>
+
+    <script>
+        const chart = echarts.init(document.getElementById('chart'), 'dark');
+        let currentPeriod = '1m';
+        let autoRefreshTimer = null;
+        let showVolume = false;
+        let showMA = false;
+        const REFRESH_INTERVAL = 2000; // 2秒刷新
+
+        // 颜色配置
+        const upColor = '#e94560';
+        const downColor = '#0cce80';
+        const upBorderColor = '#e94560';
+        const downBorderColor = '#0cce80';
+
+        function getOption(timestamps, ohlc, volumes) {
+            // 根据开关状态动态构建 grid / xAxis / yAxis / series
+            const hasVolume = showVolume && volumes && volumes.length > 0;
+
+            const grids = [
+                { left: '8%', right: '3%', top: '4%', bottom: hasVolume ? '30%' : '8%' }
+            ];
+            const xAxes = [
+                {
+                    type: 'category',
+                    data: timestamps,
+                    boundaryGap: true,
+                    axisLine: { lineStyle: { color: '#0f3460' } },
+                    axisLabel: { color: '#666', fontSize: 11 },
+                    splitLine: { show: false },
+                    gridIndex: 0
+                }
+            ];
+            const yAxes = [
+                {
+                    scale: true,
+                    splitArea: { show: false },
+                    axisLine: { lineStyle: { color: '#0f3460' } },
+                    axisLabel: { color: '#888', fontSize: 11 },
+                    splitLine: { lineStyle: { color: '#0f3460', type: 'dashed' } },
+                    gridIndex: 0
+                }
+            ];
+            const xAxisIndices = [0]; // dataZoom 使用的 xAxisIndex
+            const seriesList = [];
+
+            // K线
+            seriesList.push({
+                name: 'K线',
+                type: 'candlestick',
+                data: ohlc,
+                xAxisIndex: 0,
+                yAxisIndex: 0,
+                itemStyle: {
+                    color: upColor,
+                    color0: downColor,
+                    borderColor: upBorderColor,
+                    borderColor0: downBorderColor
+                }
+            });
+
+            // 成交量
+            if (hasVolume) {
+                grids.push({ left: '8%', right: '3%', top: '72%', height: '18%' });
+                xAxes.push({
+                    type: 'category',
+                    data: timestamps,
+                    boundaryGap: true,
+                    axisLine: { lineStyle: { color: '#0f3460' } },
+                    axisLabel: { show: false },
+                    splitLine: { show: false },
+                    gridIndex: 1
+                });
+                yAxes.push({
+                    scale: true,
+                    splitNumber: 3,
+                    axisLine: { lineStyle: { color: '#0f3460' } },
+                    axisLabel: { color: '#666', fontSize: 10 },
+                    splitLine: { show: false },
+                    gridIndex: 1
+                });
+                xAxisIndices.push(1);
+
+                seriesList.push({
+                    name: '成交量',
+                    type: 'bar',
+                    data: volumes.map((v, i) => ({
+                        value: v,
+                        itemStyle: {
+                            color: ohlc[i] && ohlc[i][1] >= ohlc[i][0] ?
+                                'rgba(233,69,96,0.5)' : 'rgba(12,206,128,0.5)'
+                        }
+                    })),
+                    xAxisIndex: 1,
+                    yAxisIndex: 1
+                });
+            }
+
+            // 均线
+            if (showMA) {
+                [5, 10, 20].forEach(ma => {
+                    seriesList.push({
+                        name: 'MA' + ma,
+                        type: 'line',
+                        data: calculateMA(ma, ohlc),
+                        smooth: true,
+                        lineStyle: { opacity: 0.6, width: 1 },
+                        symbol: 'none',
+                        xAxisIndex: 0,
+                        yAxisIndex: 0
+                    });
+                });
+            }
+
+            // dataZoom start/end
+            const dzStart = timestamps.length > 200 ? Math.max(0, 100 - (200 / timestamps.length * 100)) : 0;
+
+            return {
+                animation: false,
+                backgroundColor: '#1a1a2e',
+                tooltip: {
+                    trigger: 'axis',
+                    axisPointer: { type: 'cross' },
+                    backgroundColor: 'rgba(22,33,62,0.95)',
+                    borderColor: '#0f3460',
+                    textStyle: { color: '#e0e0e0', fontSize: 12 },
+                    formatter: function(params) {
+                        const k = params.find(p => p.seriesName === 'K线');
+                        if (!k) return '';
+                        const d = k.data;
+                        const color = d[1] >= d[0] ? upColor : downColor;
+                        return `<div style="font-size:12px">
+                            <div style="margin-bottom:4px;color:#aaa">${k.axisValue}</div>
+                            <div>开: <span style="color:${color}">${d[0]}</span></div>
+                            <div>收: <span style="color:${color}">${d[1]}</span></div>
+                            <div>低: <span style="color:${color}">${d[2]}</span></div>
+                            <div>高: <span style="color:${color}">${d[3]}</span></div>
+                        </div>`;
+                    }
+                },
+                axisPointer: {
+                    link: [{ xAxisIndex: 'all' }],
+                    label: { backgroundColor: '#16213e' }
+                },
+                grid: grids,
+                xAxis: xAxes,
+                yAxis: yAxes,
+                dataZoom: [
+                    {
+                        type: 'inside',
+                        xAxisIndex: xAxisIndices,
+                        start: dzStart,
+                        end: 100
+                    },
+                    {
+                        type: 'slider',
+                        xAxisIndex: xAxisIndices,
+                        bottom: '2%',
+                        height: 20,
+                        borderColor: '#0f3460',
+                        backgroundColor: '#16213e',
+                        fillerColor: 'rgba(233,69,96,0.15)',
+                        handleStyle: { color: '#e94560' },
+                        textStyle: { color: '#666' },
+                        start: dzStart,
+                        end: 100
+                    }
+                ],
+                series: seriesList
+            };
+        }
+
+        function calculateMA(dayCount, data) {
+            const result = [];
+            for (let i = 0; i < data.length; i++) {
+                if (i < dayCount - 1) {
+                    result.push('-');
+                    continue;
+                }
+                let sum = 0;
+                for (let j = 0; j < dayCount; j++) {
+                    sum += data[i - j][1]; // close price
+                }
+                result.push((sum / dayCount).toFixed(2));
+            }
+            return result;
+        }
+
+        async function fetchKlines() {
+            try {
+                const resp = await fetch(`/api/klines?period=${currentPeriod}&count=500`);
+                const json = await resp.json();
+                
+                if (json.error) {
+                    document.getElementById('statusText').textContent = '错误: ' + json.error;
+                    return;
+                }
+
+                chart.setOption(getOption(json.timestamps, json.ohlc, json.volumes), { notMerge: true });
+
+                // 更新头部信息
+                if (json.latest) {
+                    const l = json.latest;
+                    const priceEl = document.getElementById('currentPrice');
+                    priceEl.textContent = l.close.toFixed(2);
+                    priceEl.className = 'price ' + (l.close >= l.open ? 'up' : 'down');
+                    document.getElementById('infoOpen').textContent = l.open.toFixed(2);
+                    document.getElementById('infoHigh').textContent = l.high.toFixed(2);
+                    document.getElementById('infoLow').textContent = l.low.toFixed(2);
+                    document.getElementById('infoTotalBars').textContent = json.total_bars;
+                }
+            } catch (e) {
+                document.getElementById('statusText').textContent = '连接失败';
+            }
+        }
+
+        async function fetchInfo() {
+            try {
+                const resp = await fetch('/api/info');
+                const json = await resp.json();
+                document.getElementById('infoTicks').textContent = json.tick_count.toLocaleString();
+            } catch (e) {}
+        }
+
+        function startAutoRefresh() {
+            if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+            fetchKlines();
+            autoRefreshTimer = setInterval(fetchKlines, REFRESH_INTERVAL);
+        }
+
+        // 周期按钮
+        document.querySelectorAll('.period-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+                currentPeriod = this.dataset.period;
+                fetchKlines();
+            });
+        });
+
+        // 开关按钮：成交量 / 均线
+        document.getElementById('toggleVolume').addEventListener('click', function() {
+            showVolume = !showVolume;
+            this.classList.toggle('active', showVolume);
+            fetchKlines();
+        });
+        document.getElementById('toggleMA').addEventListener('click', function() {
+            showMA = !showMA;
+            this.classList.toggle('active', showMA);
+            fetchKlines();
+        });
+
+        // 初始化
+        chart.setOption(getOption([], [], []));
+        fetchInfo();
+        startAutoRefresh();
+        setInterval(fetchInfo, 10000);
+
+        // 响应窗口变化
+        window.addEventListener('resize', () => chart.resize());
+    </script>
+</body>
+</html>
