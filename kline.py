@@ -6,6 +6,7 @@ KLineGenerator - K线生成器
 from datetime import datetime
 from typing import List, Dict, Optional
 from dataclasses import dataclass, field
+from zhongshu import ZhongShuGenerator
 
 
 @dataclass
@@ -256,10 +257,26 @@ class KLineGenerator:
         }
 
     def get_bi_data(self, count: int = 0) -> dict:
-        """获取缠论分型和笔的渲染数据（内部自动进行包含处理）"""
+        """获取缠论分型、笔、中枢、买卖点的渲染数据（内部自动进行包含处理）"""
         bars = self.bars[-count:] if count > 0 else self.bars
         processed = self._process_inclusion_strict(bars)
-        return BiGenerator.from_klines(processed, raw_bars=bars)
+        result = BiGenerator.from_klines(processed, raw_bars=bars)
+        # 从中枢
+        bi_list = result.get('bi_lines', [])
+        if len(bi_list) >= 3:
+            zhongshu_list = ZhongShuGenerator.from_bi_list(bi_list)
+            zs_data = ZhongShuGenerator.to_render_data(zhongshu_list)
+            result['zhongshu_boxes'] = zs_data['zhongshu_boxes']
+
+            # 买卖点
+            from tradepoint import TradePointGenerator
+            trade_points = TradePointGenerator.find_trade_points(bi_list, zhongshu_list)
+            tp_data = TradePointGenerator.to_render_data(trade_points)
+            result['trade_points'] = tp_data['trade_points']
+        else:
+            result['zhongshu_boxes'] = []
+            result['trade_points'] = []
+        return result
 
     @property
     def total_bars(self) -> int:
@@ -456,6 +473,7 @@ class BiGenerator:
             ],
             'bi_lines': bi_list,
         }
+
 
 
 

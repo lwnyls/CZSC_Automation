@@ -8,6 +8,7 @@ from flask import Flask, render_template, jsonify, request
 
 from reader import MarketDataReader
 from kline import KLineGenerator
+from tradepoint_monitor import TradePointMonitor
 
 app = Flask(__name__)
 
@@ -16,6 +17,9 @@ reader = MarketDataReader()
 generators = {}  # period -> KLineGenerator
 lock = threading.Lock()
 DEFAULT_PERIOD = '1m'
+
+# 买卖点监控器
+trade_point_monitor = None
 
 
 def init_generators():
@@ -147,12 +151,24 @@ def api_bi():
     return jsonify(data)
 
 
+@app.route('/api/monitor/status')
+def api_monitor_status():
+    """获取买卖点监控状态"""
+    if trade_point_monitor:
+        return jsonify(trade_point_monitor.get_status())
+    return jsonify({'running': False})
+
+
 if __name__ == '__main__':
     init_generators()
 
     # 启动后台轮询线程
     poll_thread = threading.Thread(target=poll_new_ticks, daemon=True)
     poll_thread.start()
+
+    # 启动买卖点监控线程
+    trade_point_monitor = TradePointMonitor(generators, lock)
+    trade_point_monitor.start()
 
     print("\n启动 Web 服务...")
     app.run(host='0.0.0.0', port=5000, debug=False)

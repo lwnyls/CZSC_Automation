@@ -131,6 +131,8 @@
         <button class="toggle-btn active" id="toggleInclude">包含</button>
         <button class="toggle-btn" id="toggleBi">笔</button>
         <button class="toggle-btn" id="toggleFenxing">分型</button>
+        <button class="toggle-btn" id="toggleZhongShu">中枢</button>
+        <button class="toggle-btn" id="toggleTradePoint">买卖点</button>
         <button class="toggle-btn" id="toggleVolume">成交量</button>
         <button class="toggle-btn" id="toggleMA">均线</button>
         <span class="status"><span class="dot"></span><span id="statusText">实时更新中</span></span>
@@ -146,6 +148,8 @@
         let showFenxing = false;
         let showVolume = false;
         let showMA = false;
+        let showZhongShu = false; // 中枢开关
+        let showTradePoint = false; // 买卖点开关
         let biData = null;      // 笔数据缓存
         let isMouseOnChart = false;  // 鼠标是否悬停在图表上
         const REFRESH_INTERVAL = 2000; // 2秒刷新
@@ -232,7 +236,94 @@
                 };
             }
 
+            // 中枢：叠加 markArea 显示中枢区间（ZG/ZD 区间）
+            // 已完成中枢：紫色实框；进行中中枢：浅紫色虚线框
+            if (showZhongShu && biData && biData.zhongshu_boxes && biData.zhongshu_boxes.length > 0) {
+                klineSeries.markArea = {
+                    silent: true,
+                    data: biData.zhongshu_boxes.map(zs => {
+                        const isComplete = zs.is_complete !== false;
+                        return [
+                            {
+                                xAxis: zs.start_timestamp,
+                                yAxis: zs.zg,
+                                itemStyle: {
+                                    color: isComplete ? 'rgba(147,112,219,0.10)' : 'rgba(147,112,219,0.04)',
+                                    borderColor: isComplete ? 'rgba(147,112,219,0.6)' : 'rgba(147,112,219,0.3)',
+                                    borderWidth: 1,
+                                    borderType: isComplete ? 'solid' : 'dashed',
+                                },
+                                label: isComplete ? null : {
+                                    show: true,
+                                    position: 'insideTop',
+                                    formatter: '进行中',
+                                    color: 'rgba(147,112,219,0.6)',
+                                    fontSize: 10,
+                                }
+                            },
+                            {
+                                xAxis: zs.end_timestamp,
+                                yAxis: zs.zd,
+                                itemStyle: {
+                                    color: isComplete ? 'rgba(147,112,219,0.10)' : 'rgba(147,112,219,0.04)',
+                                    borderColor: isComplete ? 'rgba(147,112,219,0.6)' : 'rgba(147,112,219,0.3)',
+                                    borderWidth: 1,
+                                    borderType: isComplete ? 'solid' : 'dashed',
+                                }
+                            }
+                        ];
+                    })
+                };
+            }
+
             seriesList.push(klineSeries);
+
+            // 买卖点：叠加 markPoint 标记
+            if (showTradePoint && biData && biData.trade_points && biData.trade_points.length > 0) {
+                // 买点：绿色箭头向上；卖点：红色箭头向下
+                const buyPoints = biData.trade_points.filter(tp => tp.type === 'buy');
+                const sellPoints = biData.trade_points.filter(tp => tp.type === 'sell');
+
+                if (buyPoints.length > 0) {
+                    klineSeries.markPoint = klineSeries.markPoint || {};
+                    klineSeries.markPoint.data = klineSeries.markPoint.data || [];
+                    klineSeries.markPoint.data = klineSeries.markPoint.data.concat(buyPoints.map(tp => ({
+                        xAxis: tp.timestamp,
+                        yAxis: tp.price,
+                        symbol: 'arrow',
+                        symbolRotate: 0,  // 向上箭头
+                        symbolSize: 16,
+                        itemStyle: { color: '#0cce80' },
+                        label: {
+                            show: true,
+                            formatter: `L${tp.level}买`,
+                            color: '#0cce80',
+                            fontSize: 10,
+                            position: 'bottom',
+                        }
+                    })));
+                }
+
+                if (sellPoints.length > 0) {
+                    klineSeries.markPoint = klineSeries.markPoint || {};
+                    klineSeries.markPoint.data = klineSeries.markPoint.data || [];
+                    klineSeries.markPoint.data = klineSeries.markPoint.data.concat(sellPoints.map(tp => ({
+                        xAxis: tp.timestamp,
+                        yAxis: tp.price,
+                        symbol: 'arrow',
+                        symbolRotate: 180,  // 向下箭头
+                        symbolSize: 16,
+                        itemStyle: { color: '#e94560' },
+                        label: {
+                            show: true,
+                            formatter: `L${tp.level}卖`,
+                            color: '#e94560',
+                            fontSize: 10,
+                            position: 'top',
+                        }
+                    })));
+                }
+            }
 
             // 成交量
             if (hasVolume) {
@@ -478,6 +569,16 @@
             showFenxing = !showFenxing;
             this.classList.toggle('active', showFenxing);
             fetchBi().then(() => fetchKlines());
+        });
+        document.getElementById('toggleZhongShu').addEventListener('click', function() {
+            showZhongShu = !showZhongShu;
+            this.classList.toggle('active', showZhongShu);
+            fetchKlines();
+        });
+        document.getElementById('toggleTradePoint').addEventListener('click', function() {
+            showTradePoint = !showTradePoint;
+            this.classList.toggle('active', showTradePoint);
+            fetchKlines();
         });
         document.getElementById('toggleVolume').addEventListener('click', function() {
             showVolume = !showVolume;
