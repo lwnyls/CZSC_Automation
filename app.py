@@ -70,21 +70,27 @@ def api_klines():
     参数:
         period: 周期 (1m, 5m, 15m, 30m, 1h)
         count: 返回最近N根K线，默认500
+        include: 是否启用缠论K线包含处理 (true/false)，默认false
     """
     period = request.args.get('period', DEFAULT_PERIOD)
     count = int(request.args.get('count', 500))
+    include = request.args.get('include', 'false').lower() == 'true'
 
     with lock:
         gen = generators.get(period)
         if not gen:
             return jsonify({'error': f'不支持的周期: {period}'}), 400
 
-        data = gen.get_klines_echarts(count)
+        if include:
+            data = gen.get_klines_echarts_with_include(count)
+        else:
+            data = gen.get_klines_echarts(count)
         latest_bar = gen.latest_bar
 
     return jsonify({
         'period': period,
         'total_bars': gen.total_bars,
+        'included_count': len(data['timestamps']),
         'latest': {
             'timestamp': latest_bar.timestamp,
             'open': latest_bar.open,
@@ -124,6 +130,21 @@ def api_periods():
         'periods': list(generators.keys()),
         'default': DEFAULT_PERIOD,
     })
+
+
+@app.route('/api/bi')
+def api_bi():
+    """获取缠论笔数据（内部自动进行包含处理）"""
+    period = request.args.get('period', DEFAULT_PERIOD)
+    count = int(request.args.get('count', 500))
+
+    with lock:
+        gen = generators.get(period)
+        if not gen:
+            return jsonify({'error': f'不支持的周期: {period}'}), 400
+        data = gen.get_bi_data(count)
+
+    return jsonify(data)
 
 
 if __name__ == '__main__':

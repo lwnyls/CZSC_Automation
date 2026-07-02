@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MNQ2606 K线实时监控</title>
+    <title>MNQ K线实时监控</title>
     <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -98,7 +98,7 @@
 </head>
 <body>
     <div class="header">
-        <h1>MNQ2606 微纳指06</h1>
+        <h1>MNQ 微纳指</h1>
         <div class="info">
             <span>
                 <span class="price" id="currentPrice">--</span>
@@ -128,6 +128,9 @@
         <button class="period-btn" data-period="30m">30分</button>
         <button class="period-btn" data-period="1h">1时</button>
         <span style="margin-left:16px; border-left:1px solid #0f3460; height:20px; display:inline-block; vertical-align:middle;"></span>
+        <button class="toggle-btn active" id="toggleInclude">包含</button>
+        <button class="toggle-btn" id="toggleBi">笔</button>
+        <button class="toggle-btn" id="toggleFenxing">分型</button>
         <button class="toggle-btn" id="toggleVolume">成交量</button>
         <button class="toggle-btn" id="toggleMA">均线</button>
         <span class="status"><span class="dot"></span><span id="statusText">实时更新中</span></span>
@@ -138,8 +141,13 @@
         const chart = echarts.init(document.getElementById('chart'), 'dark');
         let currentPeriod = '1m';
         let autoRefreshTimer = null;
+        let showInclude = true;
+        let showBi = false;
+        let showFenxing = false;
         let showVolume = false;
         let showMA = false;
+        let biData = null;      // 笔数据缓存
+        let isMouseOnChart = false;  // 鼠标是否悬停在图表上
         const REFRESH_INTERVAL = 2000; // 2秒刷新
 
         // 颜色配置
@@ -148,9 +156,10 @@
         const upBorderColor = '#e94560';
         const downBorderColor = '#0cce80';
 
-        function getOption(timestamps, ohlc, volumes) {
+        function getOption(timestamps, ohlc, volumes, biData) {
             // 根据开关状态动态构建 grid / xAxis / yAxis / series
             const hasVolume = showVolume && volumes && volumes.length > 0;
+            const hasBi = showBi && biData;
 
             const grids = [
                 { left: '8%', right: '3%', top: '4%', bottom: hasVolume ? '30%' : '8%' }
@@ -180,7 +189,7 @@
             const seriesList = [];
 
             // K线
-            seriesList.push({
+            const klineSeries = {
                 name: 'K线',
                 type: 'candlestick',
                 data: ohlc,
@@ -192,7 +201,38 @@
                     borderColor: upBorderColor,
                     borderColor0: downBorderColor
                 }
-            });
+            };
+
+            // 笔：叠加金色 markLine 连接顶底分型
+            if (hasBi && biData.bi_lines && biData.bi_lines.length > 0) {
+                klineSeries.markLine = {
+                    silent: true,
+                    symbol: 'none',
+                    lineStyle: { color: '#FFD700', width: 2, type: 'solid', opacity: 0.85 },
+                    data: biData.bi_lines.map(bi => [
+                        { xAxis: bi.start_timestamp, yAxis: bi.start_price },
+                        { xAxis: bi.end_timestamp, yAxis: bi.end_price }
+                    ])
+                };
+            }
+
+            // 分型：叠加 markPoint 标记（独立开关）
+            if (showFenxing && biData && biData.fenxings && biData.fenxings.length > 0) {
+                klineSeries.markPoint = {
+                    silent: true,
+                    symbolSize: 10,
+                    label: { show: false },
+                    data: biData.fenxings.map(f => ({
+                        xAxis: f.timestamp,
+                        yAxis: f.price,
+                        symbol: f.type === 'top' ? 'pin' : 'pin',
+                        symbolRotate: f.type === 'top' ? 0 : 180,
+                        itemStyle: { color: f.type === 'top' ? '#e94560' : '#0cce80' }
+                    }))
+                };
+            }
+
+            seriesList.push(klineSeries);
 
             // 成交量
             if (hasVolume) {
@@ -263,13 +303,19 @@
                         const k = params.find(p => p.seriesName === 'K线');
                         if (!k) return '';
                         const d = k.data;
-                        const color = d[1] >= d[0] ? upColor : downColor;
+                        // ECharts axis trigger 对 candlestick 的数据格式可能是 [dataIndex, open, close, low, high]
+                        const offset = d.length >= 5 ? 1 : 0;
+                        const open = d[offset];
+                        const close = d[offset + 1];
+                        const low = d[offset + 2];
+                        const high = d[offset + 3];
+                        const color = close >= open ? upColor : downColor;
                         return `<div style="font-size:12px">
                             <div style="margin-bottom:4px;color:#aaa">${k.axisValue}</div>
-                            <div>开: <span style="color:${color}">${d[0]}</span></div>
-                            <div>收: <span style="color:${color}">${d[1]}</span></div>
-                            <div>低: <span style="color:${color}">${d[2]}</span></div>
-                            <div>高: <span style="color:${color}">${d[3]}</span></div>
+                            <div>开: <span style="color:${color}">${open}</span></div>
+                            <div>收: <span style="color:${color}">${close}</span></div>
+                            <div>低: <span style="color:${color}">${low}</span></div>
+                            <div>高: <span style="color:${color}">${high}</span></div>
                         </div>`;
                     }
                 },
@@ -323,7 +369,7 @@
 
         async function fetchKlines() {
             try {
-                const resp = await fetch(`/api/klines?period=${currentPeriod}&count=500`);
+                const resp = await fetch(`/api/klines?period=${currentPeriod}&count=500&include=${showInclude}`);
                 const json = await resp.json();
                 
                 if (json.error) {
@@ -331,7 +377,29 @@
                     return;
                 }
 
-                chart.setOption(getOption(json.timestamps, json.ohlc, json.volumes), { notMerge: true });
+                // 保存当前的 dataZoom 状态（仅当图表已有数据时）
+                let currentDataZoom = null;
+                const hasData = chart.getOption() && chart.getOption().series && chart.getOption().series.length > 0;
+                if (hasData) {
+                    try {
+                        const currentOption = chart.getOption();
+                        if (currentOption && currentOption.dataZoom) {
+                            currentDataZoom = JSON.parse(JSON.stringify(currentOption.dataZoom));
+                        }
+                    } catch (e) {
+                        // 忽略获取失败
+                    }
+                }
+
+                // 生成新 option
+                const newOption = getOption(json.timestamps, json.ohlc, json.volumes, (showBi || showFenxing) ? biData : null);
+
+                // 如果有保存的 dataZoom 状态且数据非空，则恢复
+                if (currentDataZoom && json.timestamps && json.timestamps.length > 0) {
+                    newOption.dataZoom = currentDataZoom;
+                }
+
+                chart.setOption(newOption, { notMerge: true });
 
                 // 更新头部信息
                 if (json.latest) {
@@ -349,6 +417,19 @@
             }
         }
 
+        async function fetchBi() {
+            if (!showBi && !showFenxing) { biData = null; return; }
+            try {
+                const resp = await fetch(`/api/bi?period=${currentPeriod}&count=500`);
+                const json = await resp.json();
+                if (!json.error) {
+                    biData = json;
+                }
+            } catch (e) {
+                biData = null;
+            }
+        }
+
         async function fetchInfo() {
             try {
                 const resp = await fetch('/api/info');
@@ -360,7 +441,13 @@
         function startAutoRefresh() {
             if (autoRefreshTimer) clearInterval(autoRefreshTimer);
             fetchKlines();
-            autoRefreshTimer = setInterval(fetchKlines, REFRESH_INTERVAL);
+            fetchBi();
+            autoRefreshTimer = setInterval(() => {
+                if (!isMouseOnChart) {
+                    fetchKlines();
+                    fetchBi();
+                }
+            }, REFRESH_INTERVAL);
         }
 
         // 周期按钮
@@ -369,11 +456,29 @@
                 document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
                 this.classList.add('active');
                 currentPeriod = this.dataset.period;
+                biData = null; // 切换周期时重置笔数据
+                userZoomed = false; // 重置缩放状态
                 fetchKlines();
+                fetchBi();
             });
         });
 
-        // 开关按钮：成交量 / 均线
+        // 开关按钮：包含 / 笔 / 成交量 / 均线
+        document.getElementById('toggleInclude').addEventListener('click', function() {
+            showInclude = !showInclude;
+            this.classList.toggle('active', showInclude);
+            fetchKlines();
+        });
+        document.getElementById('toggleBi').addEventListener('click', function() {
+            showBi = !showBi;
+            this.classList.toggle('active', showBi);
+            fetchBi().then(() => fetchKlines());
+        });
+        document.getElementById('toggleFenxing').addEventListener('click', function() {
+            showFenxing = !showFenxing;
+            this.classList.toggle('active', showFenxing);
+            fetchBi().then(() => fetchKlines());
+        });
         document.getElementById('toggleVolume').addEventListener('click', function() {
             showVolume = !showVolume;
             this.classList.toggle('active', showVolume);
@@ -393,6 +498,15 @@
 
         // 响应窗口变化
         window.addEventListener('resize', () => chart.resize());
+
+        // 鼠标悬停在图表上时暂停刷新，离开后立即刷新
+        const chartDom = document.getElementById('chart');
+        chartDom.addEventListener('mouseenter', () => { isMouseOnChart = true; });
+        chartDom.addEventListener('mouseleave', () => {
+            isMouseOnChart = false;
+            fetchKlines();
+            fetchBi();
+        });
     </script>
 </body>
 </html>
